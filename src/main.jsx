@@ -82,55 +82,57 @@ export default function App() {
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [drafts, saveDraft] = useLocalDraft();
+  const [albumFilterDate, setAlbumFilterDate] = useState(null); // 新增：相册日期筛选
 
-const refresh = async () => {
-  if (!supabase) {
-    console.error("Supabase 未配置，请检查 .env.local");
-    setLoading(false);
-    return;
-  }
-
-  const [
-    { data: e, error: entryError },
-    { data: p, error: photoError }
-  ] = await Promise.all([
-    supabase
-      .from("entries")
-      .select("*")
-      .is("deleted_at", null)
-      .order("event_date", { ascending: false }),
-
-    supabase
-      .from("photos")
-      .select("*")
-      .is("deleted_at", null)
-      .order("photo_date", { ascending: false })
-  ]);
-
-  if (entryError) {
-    console.error("读取 entries 失败：", entryError);
-  }
-
-  if (photoError) {
-    console.error("读取 photos 失败：", photoError);
-  }
-
-  setEntries(e || []);
-  setPhotos(p || []);
-
-  if (session) {
-    const { data: t, error: trashError } = await supabase
-      .from("trash")
-      .select("*")
-      .order("deleted_at", { ascending: false });
-
-    if (trashError) {
-      console.error("读取 trash 失败：", trashError);
+  const refresh = async () => {
+    if (!supabase) {
+      console.error("Supabase 未配置，请检查 .env.local");
+      setLoading(false);
+      return;
     }
 
-    setTrash(t || []);
-  }
-};
+    const [
+      { data: e, error: entryError },
+      { data: p, error: photoError }
+    ] = await Promise.all([
+      supabase
+        .from("entries")
+        .select("*")
+        .is("deleted_at", null)
+        .order("event_date", { ascending: false }),
+
+      supabase
+        .from("photos")
+        .select("*")
+        .is("deleted_at", null)
+        .order("photo_date", { ascending: false })
+    ]);
+
+    if (entryError) {
+      console.error("读取 entries 失败：", entryError);
+    }
+
+    if (photoError) {
+      console.error("读取 photos 失败：", photoError);
+    }
+
+    setEntries(e || []);
+    setPhotos(p || []);
+
+    if (session) {
+      const { data: t, error: trashError } = await supabase
+        .from("trash")
+        .select("*")
+        .order("deleted_at", { ascending: false });
+
+      if (trashError) {
+        console.error("读取 trash 失败：", trashError);
+      }
+
+      setTrash(t || []);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       if (!supabase) { setLoading(false); return; }
@@ -164,12 +166,40 @@ const refresh = async () => {
     ...(settings.background_url ? { "--bg-image": `url(${settings.background_url})` } : {})
   };
 
+  // 修改后的 softDelete：先更新原表，成功后再插入回收站，避免不一致
   const softDelete = async (table, row) => {
     if (!supabase) return;
-    await supabase.from("trash").insert({
-      owner_id: session.user.id, source_table: table, source_id: row.id, payload: row
-    });
-    await supabase.from(table).update({ deleted_at: new Date().toISOString() }).eq("id", row.id);
+
+    // 1. 先更新原表 deleted_at
+    const { error: updateError } = await supabase
+      .from(table)
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", row.id);
+
+    if (updateError) {
+      console.error("删除失败：", updateError);
+      alert("删除失败：" + updateError.message);
+      return;
+    }
+
+    // 2. 插入回收站
+    const { error: trashError } = await supabase
+      .from("trash")
+      .insert({
+        owner_id: session.user.id,
+        source_table: table,
+        source_id: row.id,
+        payload: row
+      });
+
+    if (trashError) {
+      console.error("写入回收站失败：", trashError);
+      // 回滚原表更新，恢复记录
+      await supabase.from(table).update({ deleted_at: null }).eq("id", row.id);
+      alert("删除记录进入回收站失败，已恢复原记录");
+      return;
+    }
+
     await refresh();
   };
 
@@ -185,153 +215,101 @@ const refresh = async () => {
   };
 
   const uploadPhoto = async ({
-  file,
-  caption,
-  photo_date
-}) => {
-
-  if (!file) {
-    alert("请选择照片。");
-    return;
-  }
-
-  if (!supabase || !session) {
-    alert(
-      "Supabase 尚未连接，请检查 .env.local 和匿名登录设置。"
-    );
-    return;
-  }
-
-  try {
-
-    const ext =
-      file.name.split(".").pop()?.toLowerCase() || "jpg";
-
-    const path =
-      `${session.user.id}/${crypto.randomUUID()}.${ext}`;
-
-    console.log("开始上传照片：", path);
-
-    const {
-      error: uploadError
-    } = await supabase
-      .storage
-      .from("love-media")
-      .upload(
-        path,
-        file,
-        {
-          upsert: false,
-          contentType: file.type || "image/jpeg"
-        }
-      );
-
-    if (uploadError) {
-      console.error(
-        "Storage 上传失败：",
-        uploadError
-      );
-
-      alert(
-        "照片上传失败：\n" +
-        uploadError.message
-      );
-
+    file,
+    caption,
+    photo_date
+  }) => {
+    if (!file) {
+      alert("请选择照片。");
       return;
     }
 
-    const {
-      data: publicData
-    } = supabase
-      .storage
-      .from("love-media")
-      .getPublicUrl(path);
-
-    const imageUrl =
-      publicData.publicUrl;
-
-    console.log(
-      "照片 URL：",
-      imageUrl
-    );
-
-    const {
-      error
-    } = await supabase
-      .from("photos")
-      .insert({
-        owner_id: session.user.id,
-        image_url: imageUrl,
-        caption,
-        photo_date
-      });
-
-    if (error) {
-
-      console.error(
-        "保存照片记录失败：",
-        error
-      );
-
-      alert(
-        "照片记录保存失败：\n" +
-        error.message
-      );
-
+    if (!supabase || !session) {
+      alert("Supabase 尚未连接，请检查 .env.local 和匿名登录设置。");
       return;
     }
 
-    setModal(null);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `${session.user.id}/${crypto.randomUUID()}.${ext}`;
 
-    await refresh();
+      console.log("开始上传照片：", path);
 
-  } catch (err) {
-
-    console.error(err);
-
-    alert(
-      "照片上传出现异常：\n" +
-      err.message
-    );
-  }
-};
-
-const uploadBackground = async (file) => {
-  if (!file || !supabase || !session) {
-    alert("Supabase 尚未连接，请检查登录和环境变量。");
-    return;
-  }
-
-  try {
-    const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
-
-    const path =
-      `background/${crypto.randomUUID()}.${ext}`;
-
-    const { error: uploadError } =
-      await supabase.storage
+      const { error: uploadError } = await supabase
+        .storage
         .from("love-media")
         .upload(path, file, {
           upsert: false,
           contentType: file.type || "image/jpeg"
         });
 
-    if (uploadError) {
-      console.error(uploadError);
-      alert("背景图片上传失败：" + uploadError.message);
+      if (uploadError) {
+        console.error("Storage 上传失败：", uploadError);
+        alert("照片上传失败：\n" + uploadError.message);
+        return;
+      }
+
+      const { data: publicData } = supabase
+        .storage
+        .from("love-media")
+        .getPublicUrl(path);
+
+      const imageUrl = publicData.publicUrl;
+      console.log("照片 URL：", imageUrl);
+
+      const { error } = await supabase
+        .from("photos")
+        .insert({
+          owner_id: session.user.id,
+          image_url: imageUrl,
+          caption,
+          photo_date
+        });
+
+      if (error) {
+        console.error("保存照片记录失败：", error);
+        alert("照片记录保存失败：\n" + error.message);
+        return;
+      }
+
+      setModal(null);
+      await refresh();
+    } catch (err) {
+      console.error(err);
+      alert("照片上传出现异常：\n" + err.message);
+    }
+  };
+
+  const uploadBackground = async (file) => {
+    if (!file || !supabase || !session) {
+      alert("Supabase 尚未连接，请检查登录和环境变量。");
       return;
     }
 
-    const {
-      data: publicData
-    } = supabase.storage
-      .from("love-media")
-      .getPublicUrl(path);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+      const path = `background/${crypto.randomUUID()}.${ext}`;
 
-    const backgroundUrl = publicData.publicUrl;
+      const { error: uploadError } = await supabase.storage
+        .from("love-media")
+        .upload(path, file, {
+          upsert: false,
+          contentType: file.type || "image/jpeg"
+        });
 
-    const { data, error } =
-      await supabase
+      if (uploadError) {
+        console.error(uploadError);
+        alert("背景图片上传失败：" + uploadError.message);
+        return;
+      }
+
+      const { data: publicData } = supabase.storage
+        .from("love-media")
+        .getPublicUrl(path);
+
+      const backgroundUrl = publicData.publicUrl;
+
+      const { data, error } = await supabase
         .from("site_settings")
         .upsert(
           {
@@ -346,29 +324,38 @@ const uploadBackground = async (file) => {
             background_url: backgroundUrl,
             pixel_scale: settings.pixel_scale || 4
           },
-          {
-            onConflict: "id"
-          }
+          { onConflict: "id" }
         )
         .select()
         .single();
 
-    if (error) {
-      console.error(error);
-      alert("背景地址保存失败：" + error.message);
-      return;
+      if (error) {
+        console.error(error);
+        alert("背景地址保存失败：" + error.message);
+        return;
+      }
+
+      setSettings(data);
+      return data;
+    } catch (err) {
+      console.error(err);
+      alert("背景图片处理失败：" + err.message);
     }
+  };
 
-    setSettings(data);
+  // 日历点击处理：优先跳转到有照片的相册筛选，否则跳事件簿
+  const handleCalendarJump = (dateStr) => {
+    const hasPhotos = photos.some(p => p.photo_date === dateStr);
+    const hasEntries = entries.some(e => e.event_date === dateStr);
 
-    return data;
-
-  } catch (err) {
-    console.error(err);
-    alert("背景图片处理失败：" + err.message);
-  }
-};
-
+    if (hasPhotos) {
+      setAlbumFilterDate(dateStr);
+      setTab("album");
+    } else {
+      setCalendarDate(new Date(`${dateStr}T00:00:00`));
+      setTab("events");
+    }
+  };
 
   const nav = [
     ["home", <Home size={18}/>, "首页"],
@@ -408,9 +395,9 @@ const uploadBackground = async (file) => {
 
       <main className="main">
         {tab === "home" && <HomeView settings={settings} entries={entries} photos={photos} onAdd={() => setModal("entry")} onPhoto={() => setModal("photo")} onOpen={setTab} onEdit={r => setModal({type:"edit-entry", row:r})} onDelete={softDelete} />}
-        {tab === "calendar" && <CalendarView date={calendarDate} setDate={setCalendarDate} entries={entries} photos={photos} onJump={d => { setCalendarDate(new Date(`${d}T00:00:00`)); setTab("events"); }} />}
+        {tab === "calendar" && <CalendarView date={calendarDate} setDate={setCalendarDate} entries={entries} photos={photos} onJump={handleCalendarJump} />}
         {tab === "events" && <EventsView entries={entries.filter(x => x.kind === "event")} onAdd={() => setModal("event")} onEdit={r => setModal({type:"edit-entry", row:r})} onDelete={softDelete} />}
-        {tab === "album" && <AlbumView photos={photos} onAdd={() => setModal("photo")} onDelete={softDelete} />}
+        {tab === "album" && <AlbumView photos={photos} onAdd={() => setModal("photo")} onDelete={softDelete} filterDate={albumFilterDate} onClearFilter={() => setAlbumFilterDate(null)} />}
         {tab === "board" && <BoardView entries={entries.filter(x => x.kind === "note")} onAdd={() => setModal("note")} onEdit={r => setModal({type:"edit-entry", row:r})} onDelete={softDelete} />}
         {tab === "invite" && <InviteView entries={entries.filter(x => x.kind === "invite")} onAdd={() => setModal("invite")} onEdit={r => setModal({type:"edit-entry", row:r})} onDelete={softDelete} />}
         {tab === "trash" && <TrashView trash={trash} refresh={refresh} />}
@@ -454,12 +441,6 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
           像素场景
          ========================= */}
       <div className="pixel-scene">
-
-        {/* 
-          背景图片独立成为一个图层。
-          z-index: 20
-          会压在太阳、绿色色块、房子上面。
-        */}
         {settings.background_url && (
           <div
             className="scene-background-image"
@@ -478,45 +459,10 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
           />
         )}
 
-        {/* 原来的太阳 */}
-        <div
-          className="sun"
-          style={{
-            position: "relative",
-            zIndex: 10
-          }}
-        >
-          ☼
-        </div>
-
-        {/* 原来的两个绿色色块 */}
-        <div
-          className="hill h1"
-          style={{
-            position: "relative",
-            zIndex: 10
-          }}
-        />
-
-        <div
-          className="hill h2"
-          style={{
-            position: "relative",
-            zIndex: 10
-          }}
-        />
-
-        {/* 原来的房子 */}
-        <div
-          className="house"
-          style={{
-            position: "relative",
-            zIndex: 10
-          }}
-        >
-          ⌂
-        </div>
-
+        <div className="sun" style={{ position: "relative", zIndex: 10 }}>☼</div>
+        <div className="hill h1" style={{ position: "relative", zIndex: 10 }} />
+        <div className="hill h2" style={{ position: "relative", zIndex: 10 }} />
+        <div className="house" style={{ position: "relative", zIndex: 10 }}>⌂</div>
       </div>
     </div>
 
@@ -526,10 +472,7 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
         <h3>最近发生的事</h3>
       </div>
 
-      <button
-        className="text-btn"
-        onClick={() => onOpen("events")}
-      >
+      <button className="text-btn" onClick={() => onOpen("events")}>
         查看全部 →
       </button>
     </div>
@@ -537,19 +480,9 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
     <div className="timeline">
       {latest.length
         ? latest.map(r =>
-            <TimelineItem
-              key={r.id}
-              row={r}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
+            <TimelineItem key={r.id} row={r} onEdit={onEdit} onDelete={onDelete} />
           )
-        :
-          <Empty
-            icon="✦"
-            title="还没有记录哦"
-            text="写下第一条动态，让小屋亮起来吧"
-          />
+        : <Empty icon="✦" title="还没有记录哦" text="写下第一条动态，让小屋亮起来吧" />
       }
     </div>
 
@@ -559,10 +492,7 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
         <h3>相册里的小瞬间</h3>
       </div>
 
-      <button
-        className="text-btn"
-        onClick={() => onOpen("album")}
-      >
+      <button className="text-btn" onClick={() => onOpen("album")}>
         打开相册 →
       </button>
     </div>
@@ -573,15 +503,12 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
           key={p.id}
           src={p.image_url}
           alt={p.caption || "memory"}
+          style={{ objectFit: "contain", width: "100%", height: "100%" }}
         />
       )}
 
       {!photos.length &&
-        <Empty
-          icon="▧"
-          title="还没有照片"
-          text="上传一张照片，给这本日记加一点颜色"
-        />
+        <Empty icon="▧" title="还没有照片" text="上传一张照片，给这本日记加一点颜色" />
       }
     </div>
   </section>;
@@ -637,11 +564,48 @@ function EventsView({entries, onAdd, onEdit, onDelete}) {
   </section>;
 }
 
-function AlbumView({photos, onAdd, onDelete}) {
+function AlbumView({photos, onAdd, onDelete, filterDate, onClearFilter}) {
+  // 排序：按 photo_date 降序，确保最新在前（同时兼容缺失日期）
+  const sortedPhotos = [...photos].sort((a, b) => {
+    const da = a.photo_date || "";
+    const db = b.photo_date || "";
+    return db.localeCompare(da);
+  });
+
+  const displayedPhotos = filterDate
+    ? sortedPhotos.filter(p => p.photo_date === filterDate)
+    : sortedPhotos;
+
   return <section>
-    <PageTitle eyebrow="PHOTO ALBUM" title="相册" action={<PixelButton onClick={onAdd}><ImagePlus size={16}/> 上传照片</PixelButton>}/>
-    {photos.length ? <div className="photo-grid">{photos.map(p => <figure key={p.id} className="photo-card"><img src={p.image_url}/><figcaption><span>{fmtDate(p.photo_date)}</span><b>{p.caption || "没有写下说明"}</b><button onClick={() => onDelete("photos", p)}><Trash2 size={14}/></button></figcaption></figure>)}</div> :
-      <Empty icon="▧" title="相册还是空的" text="上传照片时可以选择它属于哪一天哦"/>}
+    <PageTitle
+      eyebrow="PHOTO ALBUM"
+      title={filterDate ? `${filterDate} 的照片` : "相册"}
+      action={
+        <div style={{ display: "flex", gap: "8px" }}>
+          {filterDate && <PixelButton secondary onClick={onClearFilter}>清除日期筛选</PixelButton>}
+          <PixelButton onClick={onAdd}><ImagePlus size={16}/> 上传照片</PixelButton>
+        </div>
+      }
+    />
+    {displayedPhotos.length ? (
+      <div className="photo-grid">
+        {displayedPhotos.map(p => (
+          <figure key={p.id} className="photo-card" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            <img
+              src={p.image_url}
+              style={{ objectFit: "contain", width: "100%", height: "auto", maxHeight: "300px" }}
+            />
+            <figcaption>
+              <span>{fmtDate(p.photo_date)}</span>
+              <b>{p.caption || "没有写下说明"}</b>
+              <button onClick={() => onDelete("photos", p)}><Trash2 size={14}/></button>
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    ) : (
+      <Empty icon="▧" title={filterDate ? "这一天还没有照片" : "相册还是空的"} text={filterDate ? "试试选择其他日期吧" : "上传照片时可以选择它属于哪一天哦"} />
+    )}
   </section>;
 }
 
@@ -709,7 +673,12 @@ function PhotoModal({onClose,onSave}) {
   const pick = e => { const f=e.target.files?.[0]; if(!f)return; setFile(f); setPreview(URL.createObjectURL(f)); };
   return <Modal title="放进相册" onClose={onClose}>
     <form className="form" onSubmit={e=>{e.preventDefault();onSave({file,caption,photo_date:date})}}>
-      <label className="dropzone">{preview ? <img src={preview}/> : <><ImagePlus size={30}/><b>选择一张照片</b><small>JPG / PNG / WEBP</small></>}<input type="file" accept="image/*" required onChange={pick}/></label>
+      <label className="dropzone" style={{ display: "flex", justifyContent: "center", alignItems: "center", overflow: "hidden" }}>
+        {preview
+          ? <img src={preview} style={{ objectFit: "contain", width: "100%", height: "100%" }} />
+          : <><ImagePlus size={30}/><b>选择一张照片</b><small>JPG / PNG / WEBP</small></>}
+        <input type="file" accept="image/*" required onChange={pick} style={{ display: "none" }} />
+      </label>
       <label>这张照片属于哪一天？<input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>
       <label>照片说明<input value={caption} onChange={e=>setCaption(e.target.value)} placeholder="例如：那天下雨了，但我们还是去了。"/></label>
       <div className="modal-actions"><PixelButton secondary onClick={onClose}>取消</PixelButton><PixelButton type="submit" disabled={!file}>上传</PixelButton></div>
@@ -730,70 +699,43 @@ function SettingsModal({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  const set = (k, v) =>
-    setForm(f => ({
-      ...f,
-      [k]: v
-    }));
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const pickBackground = e => {
     const file = e.target.files?.[0];
-
     if (!file) return;
-
     if (!file.type.startsWith("image/")) {
       alert("请选择图片文件");
       return;
     }
-
     if (file.size > 10 * 1024 * 1024) {
       alert("背景图片不能超过 10 MB");
       return;
     }
-
     setBackgroundFile(file);
-
     const localUrl = URL.createObjectURL(file);
     setPreview(localUrl);
   };
 
   const save = async e => {
     e.preventDefault();
-
     if (!supabase || !session) {
-      alert(
-        "Supabase 尚未连接，请检查 .env.local 和匿名登录设置"
-      );
+      alert("Supabase 尚未连接，请检查 .env.local 和匿名登录设置");
       return;
     }
-
     setSaving(true);
-
     try {
       let nextForm = { ...form };
-
-      /*
-       * 如果选择了新的背景图片，
-       * 先上传到 Storage。
-       */
       if (backgroundFile) {
         setUploading(true);
-
         const uploaded = await onUploadBackground(backgroundFile);
-
         setUploading(false);
-
         if (!uploaded) {
           setSaving(false);
           return;
         }
-
         nextForm = uploaded;
       }
-
-      /*
-       * 保存网站颜色、标题等设置。
-       */
       const payload = {
         id: true,
         owner_id: session.user.id,
@@ -806,26 +748,17 @@ function SettingsModal({
         background_url: nextForm.background_url || null,
         pixel_scale: nextForm.pixel_scale || 4
       };
-
-      const {
-        data,
-        error
-      } = await supabase
+      const { data, error } = await supabase
         .from("site_settings")
-        .upsert(payload, {
-          onConflict: "id"
-        })
+        .upsert(payload, { onConflict: "id" })
         .select()
         .single();
-
       if (error) {
         console.error("保存设置失败：", error);
         alert("保存失败：" + error.message);
         return;
       }
-
       onSaved(data);
-
     } finally {
       setSaving(false);
       setUploading(false);
@@ -834,132 +767,37 @@ function SettingsModal({
 
   return (
     <Modal title="自定义小屋" onClose={onClose}>
-
       <form className="form" onSubmit={save}>
-
-        <label>
-          小屋名称
-          <input
-            value={form.site_title || ""}
-            onChange={e =>
-              set("site_title", e.target.value)
-            }
-            placeholder="love-journal"
-          />
-        </label>
-
-        <label>
-          副标题
-          <input
-            value={form.subtitle || ""}
-            onChange={e =>
-              set("subtitle", e.target.value)
-            }
-            placeholder="把幸福的时刻，一格一格收藏起来"
-          />
-        </label>
-
+        <label>小屋名称<input value={form.site_title || ""} onChange={e => set("site_title", e.target.value)} placeholder="love-journal" /></label>
+        <label>副标题<input value={form.subtitle || ""} onChange={e => set("subtitle", e.target.value)} placeholder="把幸福的时刻，一格一格收藏起来" /></label>
         <div className="color-row">
-          {[
-            ["accent", "主色"],
-            ["accent_2", "辅助色"],
-            ["paper", "纸张色"],
-            ["ink", "文字色"]
-          ].map(([k, l]) => (
-            <label key={k}>
-              {l}
-
-              <input
-                type="color"
-                value={form[k] || "#ffffff"}
-                onChange={e =>
-                  set(k, e.target.value)
-                }
-              />
-            </label>
+          {[["accent", "主色"], ["accent_2", "辅助色"], ["paper", "纸张色"], ["ink", "文字色"]].map(([k, l]) => (
+            <label key={k}>{l}<input type="color" value={form[k] || "#ffffff"} onChange={e => set(k, e.target.value)} /></label>
           ))}
         </div>
-
-        <label>
-          背景图片
-
+        <label>背景图片
           <div className="background-upload">
-
-            {preview ? (
-              <img
-                src={preview}
-                alt="背景预览"
-                className="background-preview"
-              />
-            ) : (
-              <div className="background-empty">
-                暂无背景图片
-              </div>
-            )}
-
+            {preview ? <img src={preview} alt="背景预览" className="background-preview" style={{ objectFit: "contain", width: "100%", height: "auto" }} /> : <div className="background-empty">暂无背景图片</div>}
             <label className="pixel-btn secondary">
-              <ImagePlus size={15}/>
-              {uploading
-                ? "正在上传……"
-                : "选择新的背景图片"}
-
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                onChange={pickBackground}
-                style={{ display: "none" }}
-              />
+              <ImagePlus size={15}/>{uploading ? "正在上传……" : "选择新的背景图片"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" onChange={pickBackground} style={{ display: "none" }} />
             </label>
-
           </div>
         </label>
-
-        <div
-          className="theme-preview"
-          style={{
-            backgroundColor: form.paper,
-            color: form.ink
-          }}
-        >
-          <div style={{ background: form.accent }}>
-            ♥
-          </div>
-
-          <span>
-            这是你的小屋预览
-          </span>
+        <div className="theme-preview" style={{ backgroundColor: form.paper, color: form.ink }}>
+          <div style={{ background: form.accent }}>♥</div>
+          <span>这是你的小屋预览</span>
         </div>
-
-        <p className="form-help">
-          背景图片会上传到 Supabase Storage 的
-          love-media/background/ 文件夹，
-          保存后会立即应用到网站顶部
-        </p>
-
+        <p className="form-help">背景图片会上传到 Supabase Storage 的 love-media/background/ 文件夹，保存后会立即应用到网站顶部</p>
         <div className="modal-actions">
-
-          <PixelButton
-            secondary
-            onClick={onClose}
-            disabled={saving}
-          >
-            取消
-          </PixelButton>
-
-          <PixelButton
-            type="submit"
-            disabled={saving}
-          >
-            {saving ? "保存中……" : "保存外观"}
-          </PixelButton>
-
+          <PixelButton secondary onClick={onClose} disabled={saving}>取消</PixelButton>
+          <PixelButton type="submit" disabled={saving}>{saving ? "保存中……" : "保存外观"}</PixelButton>
         </div>
-
       </form>
-
     </Modal>
   );
 }
+
 /* ===== React 应用挂载 ===== */
 const root = createRoot(document.getElementById("root"));
 root.render(<App />);
