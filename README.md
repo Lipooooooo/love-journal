@@ -37,3 +37,4 @@
 ## 安全
 
 不要把 Supabase service_role key 放进前端。前端只使用 publishable/anon key，并依靠 RLS 控制权限。"# love-journal" 
+"# love-journal - updated" 
