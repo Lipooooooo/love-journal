@@ -37,38 +37,38 @@ function today() {
 
 function fmtDate(v) {
   if (!v) return "";
-  return new Date(`${v}T00:00:00`).toLocaleDateString("zh-CN", {
+  return new Date(`${v}T00:00:00`).toLocaleDateString("zh‑CN", {
     year: "numeric", month: "long", day: "numeric"
   });
 }
 
 function useLocalDraft() {
   const [drafts, setDrafts] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("love-drafts") || "{}"); } catch { return {}; }
+    try { return JSON.parse(localStorage.getItem("love‑drafts") || "{}"); } catch { return {}; }
   });
   const save = (key, value) => {
     const next = { ...drafts, [key]: value };
     setDrafts(next);
-    localStorage.setItem("love-drafts", JSON.stringify(next));
+    localStorage.setItem("love‑drafts", JSON.stringify(next));
   };
   return [drafts, save];
 }
 
 function Modal({ title, children, onClose, wide = false }) {
-  return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <div className={`modal ${wide ? "modal-wide" : ""}`}>
-      <div className="modal-head"><h3>{title}</h3><button className="icon-btn" onClick={onClose}><X size={18} /></button></div>
+  return <div className="modal‑backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div className={`modal ${wide ? "modal‑wide" : ""}`}>
+      <div className="modal‑head"><h3>{title}</h3><button className="icon‑btn" onClick={onClose}><X size={18} /></button></div>
       {children}
     </div>
   </div>;
 }
 
 function PixelButton({ children, onClick, secondary = false, danger = false, type = "button", disabled = false }) {
-  return <button type={type} disabled={disabled} className={`pixel-btn ${secondary ? "secondary" : ""} ${danger ? "danger" : ""}`} onClick={onClick}>{children}</button>;
+  return <button type={type} disabled={disabled} className={`pixel‑btn ${secondary ? "secondary" : ""} ${danger ? "danger" : ""}`} onClick={onClick}>{children}</button>;
 }
 
 function Empty({ icon, title, text }) {
-  return <div className="empty"><div className="empty-icon">{icon}</div><strong>{title}</strong><span>{text}</span></div>;
+  return <div className="empty"><div className="empty‑icon">{icon}</div><strong>{title}</strong><span>{text}</span></div>;
 }
 
 export default function App() {
@@ -79,10 +79,13 @@ export default function App() {
   const [trash, setTrash] = useState([]);
   const [tab, setTab] = useState("home");
   const [modal, setModal] = useState(null);
-  const [calendarDate, setCalendarDate] = useState(new Date());
+  // 修复：使用today字符串构造消除时区偏移
+  const [calendarDate, setCalendarDate] = useState(() => {
+    return new Date(`${today()}T00:00:00`);
+  });
   const [loading, setLoading] = useState(true);
   const [drafts, saveDraft] = useLocalDraft();
-  const [albumFilterDate, setAlbumFilterDate] = useState(null); // 新增：相册日期筛选
+  const [albumFilterDate, setAlbumFilterDate] = useState(null);
 
   const refresh = async () => {
     if (!supabase) {
@@ -151,26 +154,35 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) return;
-    const channel = supabase.channel("love-live")
+    const channel = supabase.channel("love‑live")
       .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "photos" }, refresh)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [session]);
 
+  // 修复：每次切换到日历tab，重新生成安全Date对象
+  useEffect(() => {
+    if (tab === "calendar") {
+      setCalendarDate(prev => {
+        const y = prev.getFullYear();
+        const m = prev.getMonth();
+        return new Date(`${y}-${String(m + 1).padStart(2, "0")}-01T00:00:00`);
+      });
+    }
+  }, [tab]);
+
   const cssVars = {
     "--accent": settings.accent,
     "--accent2": settings.accent_2,
     "--paper": settings.paper,
     "--ink": settings.ink,
-    ...(settings.background_url ? { "--bg-image": `url(${settings.background_url})` } : {})
+    ...(settings.background_url ? { "--bg‑image": `url(${settings.background_url})` } : {})
   };
 
-  // 修改后的 softDelete：先更新原表，成功后再插入回收站，避免不一致
   const softDelete = async (table, row) => {
     if (!supabase) return;
 
-    // 1. 先更新原表 deleted_at
     const { error: updateError } = await supabase
       .from(table)
       .update({ deleted_at: new Date().toISOString() })
@@ -182,7 +194,6 @@ export default function App() {
       return;
     }
 
-    // 2. 插入回收站
     const { error: trashError } = await supabase
       .from("trash")
       .insert({
@@ -194,7 +205,6 @@ export default function App() {
 
     if (trashError) {
       console.error("写入回收站失败：", trashError);
-      // 回滚原表更新，恢复记录
       await supabase.from(table).update({ deleted_at: null }).eq("id", row.id);
       alert("删除记录进入回收站失败，已恢复原记录");
       return;
@@ -237,7 +247,7 @@ export default function App() {
 
       const { error: uploadError } = await supabase
         .storage
-        .from("love-media")
+        .from("love‑media")
         .upload(path, file, {
           upsert: false,
           contentType: file.type || "image/jpeg"
@@ -251,7 +261,7 @@ export default function App() {
 
       const { data: publicData } = supabase
         .storage
-        .from("love-media")
+        .from("love‑media")
         .getPublicUrl(path);
 
       const imageUrl = publicData.publicUrl;
@@ -291,7 +301,7 @@ export default function App() {
       const path = `background/${crypto.randomUUID()}.${ext}`;
 
       const { error: uploadError } = await supabase.storage
-        .from("love-media")
+        .from("love‑media")
         .upload(path, file, {
           upsert: false,
           contentType: file.type || "image/jpeg"
@@ -304,7 +314,7 @@ export default function App() {
       }
 
       const { data: publicData } = supabase.storage
-        .from("love-media")
+        .from("love‑media")
         .getPublicUrl(path);
 
       const backgroundUrl = publicData.publicUrl;
@@ -343,7 +353,6 @@ export default function App() {
     }
   };
 
-  // 日历点击处理：优先跳转到有照片的相册筛选，否则跳事件簿
   const handleCalendarJump = (dateStr) => {
     const hasPhotos = photos.some(p => p.photo_date === dateStr);
     const hasEntries = entries.some(e => e.event_date === dateStr);
@@ -367,39 +376,39 @@ export default function App() {
     ["trash", <Trash2 size={18} />, "回收站"]
   ];
 
-  if (loading) return <div className="loading-screen"><div className="pixel-heart">♥</div><p>正在打开我们的小屋……</p></div>;
+  if (loading) return <div className="loading‑screen"><div className="pixel‑heart">♥</div><p>正在打开我们的小屋……</p></div>;
 
   return <div className="app" style={cssVars}>
     <header className="topbar">
       <div className="brand" onClick={() => setTab("home")}>
-        <div className="brand-sprite">♥</div>
+        <div className="brand‑sprite">♥</div>
         <div><h1>{settings.site_title}</h1><small>{settings.subtitle}</small></div>
       </div>
-      <div className="top-actions">
-        <span className="online-dot">● 开放记录中</span>
-        <button className="icon-btn" title="自定义" onClick={() => setModal("settings")}><Palette size={18} /></button>
+      <div className="top‑actions">
+        <span className="online‑dot">● 开放记录中</span>
+        <button className="icon‑btn" title="自定义" onClick={() => setModal("settings")}><Palette size={18} /></button>
       </div>
     </header>
 
     <div className="layout">
       <aside className="sidebar">
-        <div className="side-label">MENU</div>
+        <div className="side‑label">MENU</div>
         {nav.map(([id, icon, label]) =>
-          <button key={id} className={`nav-btn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{icon}<span>{label}</span></button>
+          <button key={id} className={`nav‑btn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{icon}<span>{label}</span></button>
         )}
-        <div className="sidebar-card">
+        <div className="sidebar‑card">
           <Sparkles size={16} /><b>小提示</b>
           <span>删除的动态不会马上消失，而是会先进入回收站</span>
         </div>
       </aside>
 
       <main className="main">
-        {tab === "home" && <HomeView settings={settings} entries={entries} photos={photos} onAdd={() => setModal("entry")} onPhoto={() => setModal("photo")} onOpen={setTab} onEdit={r => setModal({ type: "edit-entry", row: r })} onDelete={softDelete} />}
+        {tab === "home" && <HomeView settings={settings} entries={entries} photos={photos} onAdd={() => setModal("entry")} onPhoto={() => setModal("photo")} onOpen={setTab} onEdit={r => setModal({ type: "edit‑entry", row: r })} onDelete={softDelete} />}
         {tab === "calendar" && <CalendarView date={calendarDate} setDate={setCalendarDate} entries={entries} photos={photos} onJump={handleCalendarJump} />}
-        {tab === "events" && <EventsView entries={entries.filter(x => x.kind === "event")} onAdd={() => setModal("event")} onEdit={r => setModal({ type: "edit-entry", row: r })} onDelete={softDelete} />}
+        {tab === "events" && <EventsView entries={entries.filter(x => x.kind === "event")} onAdd={() => setModal("event")} onEdit={r => setModal({ type: "edit‑entry", row: r })} onDelete={softDelete} />}
         {tab === "album" && <AlbumView photos={photos} onAdd={() => setModal("photo")} onDelete={softDelete} filterDate={albumFilterDate} onClearFilter={() => setAlbumFilterDate(null)} />}
-        {tab === "board" && <BoardView entries={entries.filter(x => x.kind === "note")} onAdd={() => setModal("note")} onEdit={r => setModal({ type: "edit-entry", row: r })} onDelete={softDelete} />}
-        {tab === "invite" && <InviteView entries={entries.filter(x => x.kind === "invite")} onAdd={() => setModal("invite")} onEdit={r => setModal({ type: "edit-entry", row: r })} onDelete={softDelete} />}
+        {tab === "board" && <BoardView entries={entries.filter(x => x.kind === "note")} onAdd={() => setModal("note")} onEdit={r => setModal({ type: "edit‑entry", row: r })} onDelete={softDelete} />}
+        {tab === "invite" && <InviteView entries={entries.filter(x => x.kind === "invite")} onAdd={() => setModal("invite")} onEdit={r => setModal({ type: "edit‑entry", row: r })} onDelete={softDelete} />}
         {tab === "trash" && <TrashView trash={trash} refresh={refresh} />}
       </main>
     </div>
@@ -408,7 +417,7 @@ export default function App() {
     {modal === "note" && <EntryModal title="写一张留言" kind="note" onClose={() => setModal(null)} onSave={addEntry} />}
     {modal === "event" && <EntryModal title="记录一件小事" kind="event" onClose={() => setModal(null)} onSave={addEntry} />}
     {modal === "invite" && <EntryModal title="发出约会邀请" kind="invite" onClose={() => setModal(null)} onSave={addEntry} />}
-    {modal?.type === "edit-entry" && <EntryModal title="编辑记录" initial={modal.row} kind={modal.row.kind} onClose={() => setModal(null)} onSave={p => updateEntry(modal.row.id, p)} />}
+    {modal?.type === "edit‑entry" && <EntryModal title="编辑记录" initial={modal.row} kind={modal.row.kind} onClose={() => setModal(null)} onSave={p => updateEntry(modal.row.id, p)} />}
     {modal === "photo" && <PhotoModal onClose={() => setModal(null)} onSave={uploadPhoto} />}
     {modal === "settings" && <SettingsModal settings={settings} session={session} onClose={() => setModal(null)} onSaved={s => { setSettings(s); setModal(null); }} onUploadBackground={uploadBackground} />}
   </div>;
@@ -418,7 +427,7 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
   const latest = entries.slice(0, 5);
 
   return <section>
-    <div className="hero-card">
+    <div className="hero‑card">
       <div>
         <span className="eyebrow">OUR LITTLE WORLD</span>
         <h2>今天，也值得被收藏</h2>
@@ -426,7 +435,7 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
           一本慢慢变厚的日记，放进约会、旅行和日常但温暖的小事们
         </p>
 
-        <div className="hero-actions">
+        <div className="hero‑actions">
           <PixelButton onClick={onAdd}>
             <Plus size={16} /> 写下新动态
           </PixelButton>
@@ -437,16 +446,13 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
         </div>
       </div>
 
-      {/* =========================
-          像素场景
-         ========================= */}
-      <div className="pixel-scene">
+      <div className="pixel‑scene">
         {settings.background_url && (
           <div
-            className="scene-background-image"
+            className="scene‑background‑image"
             style={{
               backgroundImage: `
-                linear-gradient(
+                linear‑gradient(
                   rgba(215,216,205,.35),
                   rgba(185,185,167,.35)
                 ),
@@ -454,7 +460,7 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
               `,
               backgroundSize: "cover",
               backgroundPosition: "center bottom",
-              backgroundRepeat: "no-repeat"
+              backgroundRepeat: "no‑repeat"
             }}
           />
         )}
@@ -466,13 +472,13 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
       </div>
     </div>
 
-    <div className="section-head">
+    <div className="section‑head">
       <div>
         <span className="eyebrow">RECENT</span>
         <h3>最近发生的事</h3>
       </div>
 
-      <button className="text-btn" onClick={() => onOpen("events")}>
+      <button className="text‑btn" onClick={() => onOpen("events")}>
         查看全部 →
       </button>
     </div>
@@ -486,18 +492,18 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
       }
     </div>
 
-    <div className="section-head">
+    <div className="section‑head">
       <div>
         <span className="eyebrow">MEMORIES</span>
         <h3>相册里的小瞬间</h3>
       </div>
 
-      <button className="text-btn" onClick={() => onOpen("album")}>
+      <button className="text‑btn" onClick={() => onOpen("album")}>
         打开相册 →
       </button>
     </div>
 
-    <div className="mini-gallery">
+    <div className="mini‑gallery">
       {photos.slice(0, 4).map(p =>
         <img
           key={p.id}
@@ -516,27 +522,29 @@ function HomeView({ settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, o
 
 function TimelineItem({ row, onEdit, onDelete }) {
   const icon = row.kind === "invite" ? "♡" : row.event_type ? (TYPES.find(x => x[0] === row.event_type)?.[2] || "✦") : "✎";
-  return <article className="timeline-item">
-    <div className="timeline-dot">{icon}</div>
-    <div className="timeline-body">
-      <div className="item-meta">{fmtDate(row.event_date)} {row.event_time ? `· ${row.event_time.slice(0, 5)}` : ""}</div>
+  return <article className="timeline‑item">
+    <div className="timeline‑dot">{icon}</div>
+    <div className="timeline‑body">
+      <div className="item‑meta">{fmtDate(row.event_date)} {row.event_time ? `· ${row.event_time.slice(0, 5)}` : ""}</div>
       <h4>{row.title}</h4>
       {row.content && <p>{row.content}</p>}
       {row.place && <span className="place"><MapPin size={13} /> {row.place}</span>}
     </div>
-    <div className="item-actions"><button onClick={() => onEdit(row)}>编辑</button><button onClick={() => onDelete("entries", row)}>回收</button></div>
+    <div className="item‑actions"><button onClick={() => onEdit(row)}>编辑</button><button onClick={() => onDelete("entries", row)}>回收</button></div>
   </article>;
 }
 
-// ========== 修复后的 CalendarView 组件 ==========
+// 【修复完成的 CalendarView】
 function CalendarView({ date, setDate, entries, photos, onJump }) {
   const year = date.getFullYear();
   const month = date.getMonth();
 
-  // 修复：使用UTC构造当月1号，规避时区偏移导致星期错乱
-  const firstDayDate = new Date(Date.UTC(year, month, 1));
-  const first = firstDayDate.getUTCDay(); // 0=周日，6=周六，和本地getDay返回顺序完全一致
-  const days = new Date(year, month + 1, 0).getDate();
+  const firstDayStr = `${year}-${String(month + 1).padStart(2, "0")}-01T00:00:00`;
+  const firstDate = new Date(firstDayStr);
+  const first = firstDate.getDay();
+
+  const nextMonthStr = `${year}-${String(month + 2).padStart(2, "0")}-01T00:00:00`;
+  const days = new Date(new Date(nextMonthStr).getTime() - 86400_000).getDate();
 
   const cells = Array.from({ length: first + days }, (_, i) => i < first ? null : i - first + 1);
   const marked = new Set([...entries.map(x => x.event_date), ...photos.map(x => x.photo_date)]);
@@ -544,15 +552,31 @@ function CalendarView({ date, setDate, entries, photos, onJump }) {
 
   return <section>
     <PageTitle eyebrow="CALENDAR" title="我们的时间轴" action={<PixelButton onClick={() => onJump(today())}>回到今天</PixelButton>} />
-    <div className="calendar-card">
-      <div className="calendar-head"><button className="icon-btn" onClick={() => setDate(new Date(year, month - 1, 1))}><ChevronLeft /></button><h2>{year} / {String(month + 1).padStart(2, "0")}</h2><button className="icon-btn" onClick={() => setDate(new Date(year, month + 1, 1))}><ChevronRight /></button></div>
+    <div className="calendar‑card">
+      <div className="calendar‑head">
+        <button className="icon‑btn" onClick={() => {
+          const prevMonth = new Date(date.getTime());
+          prevMonth.setMonth(prevMonth.getMonth() - 1);
+          const py = prevMonth.getFullYear();
+          const pm = prevMonth.getMonth();
+          setDate(new Date(`${py}-${String(pm + 1).padStart(2, "0")}-01T00:00:00`));
+        }}><ChevronLeft /></button>
+        <h2>{year} / {String(month + 1).padStart(2, "0")}</h2>
+        <button className="icon‑btn" onClick={() => {
+          const nextMonth = new Date(date.getTime());
+          nextMonth.setMonth(nextMonth.getMonth() + 1);
+          const ny = nextMonth.getFullYear();
+          const nm = nextMonth.getMonth();
+          setDate(new Date(`${ny}-${String(nm + 1).padStart(2, "0")}-01T00:00:00`));
+        }}><ChevronRight /></button>
+      </div>
       <div className="weekdays">{["日", "一", "二", "三", "四", "五", "六"].map(x => <b key={x}>{x}</b>)}</div>
-      <div className="calendar-grid">{cells.map((d, i) => d === null ? <div key={i} /> :
+      <div className="calendar‑grid">{cells.map((d, i) => d === null ? <div key={i} /> :
         <button key={d} className={`day ${marked.has(dateKey(d)) ? "marked" : ""} ${dateKey(d) === today() ? "today" : ""}`} onClick={() => onJump(dateKey(d))}>
           <span>{d}</span>{marked.has(dateKey(d)) && <i>♥</i>}
         </button>)}</div>
     </div>
-    <div className="calendar-hint"><CalendarDays size={18} /> 点击有爱心标记的日期，可跳转查看当天记录</div>
+    <div className="calendar‑hint"><CalendarDays size={18} /> 点击有爱心标记的日期，可跳转查看当天记录</div>
   </section>;
 }
 
@@ -560,19 +584,18 @@ function EventsView({ entries, onAdd, onEdit, onDelete }) {
   const grouped = TYPES.map(([id, label]) => [id, label, entries.filter(x => x.event_type === id)]);
   return <section>
     <PageTitle eyebrow="EVENT BOOK" title="事件簿" action={<PixelButton onClick={onAdd}><Plus size={16} /> 新事件</PixelButton>} />
-    <div className="folder-grid">
-      {grouped.map(([id, label, list]) => <div className="folder-card" key={id}>
-        <div className="folder-tab">{label}</div><div className="folder-icon">{TYPES.find(x => x[0] === id)?.[2]}</div><strong>{list.length} 条记录</strong>
-        <div className="folder-preview">{list.slice(0, 3).map(r => <button key={r.id} onClick={() => onEdit(r)}>{r.title}<span>{fmtDate(r.event_date)}</span></button>)}</div>
+    <div className="folder‑grid">
+      {grouped.map(([id, label, list]) => <div className="folder‑card" key={id}>
+        <div className="folder‑tab">{label}</div><div className="folder‑icon">{TYPES.find(x => x[0] === id)?.[2]}</div><strong>{list.length} 条记录</strong>
+        <div className="folder‑preview">{list.slice(0, 3).map(r => <button key={r.id} onClick={() => onEdit(r)}>{r.title}<span>{fmtDate(r.event_date)}</span></button>)}</div>
         {!list.length && <small>这个文件夹还很轻……</small>}
       </div>)}
     </div>
-    <div className="stack-list">{entries.map(r => <TimelineItem key={r.id} row={r} onEdit={onEdit} onDelete={onDelete} />)}</div>
+    <div className="stack‑list">{entries.map(r => <TimelineItem key={r.id} row={r} onEdit={onEdit} onDelete={onDelete} />)}</div>
   </section>;
 }
 
 function AlbumView({ photos, onAdd, onDelete, filterDate, onClearFilter }) {
-  // 排序：按 photo_date 降序，确保最新在前（同时兼容缺失日期）
   const sortedPhotos = [...photos].sort((a, b) => {
     const da = a.photo_date || "";
     const db = b.photo_date || "";
@@ -595,9 +618,9 @@ function AlbumView({ photos, onAdd, onDelete, filterDate, onClearFilter }) {
       }
     />
     {displayedPhotos.length ? (
-      <div className="photo-grid">
+      <div className="photo‑grid">
         {displayedPhotos.map(p => (
-          <figure key={p.id} className="photo-card" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <figure key={p.id} className="photo‑card" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
             <img
               src={p.image_url}
               style={{ objectFit: "contain", width: "100%", height: "auto", maxHeight: "300px" }}
@@ -619,8 +642,8 @@ function AlbumView({ photos, onAdd, onDelete, filterDate, onClearFilter }) {
 function BoardView({ entries, onAdd, onEdit, onDelete }) {
   return <section>
     <PageTitle eyebrow="MESSAGE BOARD" title="留言板" action={<PixelButton onClick={onAdd}><Plus size={16} /> 留下一句话</PixelButton>} />
-    <div className="note-grid">
-      {entries.map(r => <article className="sticky-note" key={r.id}><span>{fmtDate(r.event_date)}</span><h3>{r.title}</h3><p>{r.content}</p><div><button onClick={() => onEdit(r)}>编辑</button><button onClick={() => onDelete("entries", r)}>回收</button></div></article>)}
+    <div className="note‑grid">
+      {entries.map(r => <article className="sticky‑note" key={r.id}><span>{fmtDate(r.event_date)}</span><h3>{r.title}</h3><p>{r.content}</p><div><button onClick={() => onEdit(r)}>编辑</button><button onClick={() => onDelete("entries", r)}>回收</button></div></article>)}
       {!entries.length && <Empty icon="♡" title="还没有留言" text="可以写一句今天想对对方说的话" />}
     </div>
   </section>;
@@ -629,8 +652,8 @@ function BoardView({ entries, onAdd, onEdit, onDelete }) {
 function InviteView({ entries, onAdd, onEdit, onDelete }) {
   return <section>
     <PageTitle eyebrow="DATE INVITATION" title="约会邀请" action={<PixelButton onClick={onAdd}><Heart size={16} /> 写邀请函</PixelButton>} />
-    <div className="invite-grid">
-      {entries.map(r => <article className="invite-card" key={r.id}><div className="invite-top">YOU ARE INVITED ♥</div><h2>{r.title}</h2><div className="invite-row"><CalendarDays size={15} />{fmtDate(r.event_date)} {r.event_time && `· ${r.event_time.slice(0, 5)}`}</div><div className="invite-row"><MapPin size={15} />{r.place || "等你一起决定"}</div><div className="invite-content">{r.content}</div><div className="invite-actions"><button onClick={() => onEdit(r)}>编辑</button><button onClick={() => onDelete("entries", r)}>回收</button></div></article>)}
+    <div className="invite‑grid">
+      {entries.map(r => <article className="invite‑card" key={r.id}><div className="invite‑top">YOU ARE INVITED ♥</div><h2>{r.title}</h2><div className="invite‑row"><CalendarDays size={15} />{fmtDate(r.event_date)} {r.event_time && `· ${r.event_time.slice(0, 5)}`}</div><div className="invite‑row"><MapPin size={15} />{r.place || "等你一起决定"}</div><div className="invite‑content">{r.content}</div><div className="invite‑actions"><button onClick={() => onEdit(r)}>编辑</button><button onClick={() => onDelete("entries", r)}>回收</button></div></article>)}
       {!entries.length && <Empty icon="✉" title="还没有约会邀请" text="发出第一封像素邀请函吧(*^▽^*)" />}
     </div>
   </section>;
@@ -650,14 +673,14 @@ function TrashView({ trash, refresh }) {
   };
   return <section>
     <PageTitle eyebrow="TRASH" title="回收站" action={<span className="muted">{trash.length} 项</span>} />
-    <div className="trash-list">{trash.map(t => <article key={t.id}><div><b>{t.payload?.title || t.payload?.caption || "已删除项目"}</b><span>{t.source_table === "photos" ? "照片" : "记录"} · {new Date(t.deleted_at).toLocaleString("zh-CN")}</span></div><div><PixelButton secondary onClick={() => restore(t)}><RotateCcw size={15} /> 恢复</PixelButton><button className="text-danger" onClick={() => destroy(t)}>永久删除</button></div></article>)}
+    <div className="trash‑list">{trash.map(t => <article key={t.id}><div><b>{t.payload?.title || t.payload?.caption || "已删除项目"}</b><span>{t.source_table === "photos" ? "照片" : "记录"} · {new Date(t.deleted_at).toLocaleString("zh‑CN")}</span></div><div><PixelButton secondary onClick={() => restore(t)}><RotateCcw size={15} /> 恢复</PixelButton><button className="text‑danger" onClick={() => destroy(t)}>永久删除</button></div></article>)}
       {!trash.length && <Empty icon="♧" title="回收站是空的" text="被回收的内容会出现在这里。" />}
     </div>
   </section>;
 }
 
 function PageTitle({ eyebrow, title, action }) {
-  return <div className="page-title"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action}</div>;
+  return <div className="page‑title"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action}</div>;
 }
 
 function EntryModal({ title, kind, initial, onClose, onSave }) {
@@ -666,11 +689,11 @@ function EntryModal({ title, kind, initial, onClose, onSave }) {
   return <Modal title={title} onClose={onClose}>
     <form className="form" onSubmit={e => { e.preventDefault(); onSave({ ...form, kind }); }}>
       <label>标题<input required value={form.title} onChange={e => set("title", e.target.value)} placeholder="比如：第一次约会" /></label>
-      <div className="two-col"><label>日期<input type="date" required value={form.event_date} onChange={e => set("event_date", e.target.value)} /></label><label>时间<input type="time" value={form.event_time || ""} onChange={e => set("event_time", e.target.value)} /></label></div>
+      <div className="two‑col"><label>日期<input type="date" required value={form.event_date} onChange={e => set("event_date", e.target.value)} /></label><label>时间<input type="time" value={form.event_time || ""} onChange={e => set("event_time", e.target.value)} /></label></div>
       {kind === "event" && <label>事件类型<select value={form.event_type || "date"} onChange={e => set("event_type", e.target.value)}>{TYPES.map(([id, l]) => <option key={id} value={id}>{l}</option>)}</select></label>}
       {kind === "invite" && <label>地点<input value={form.place || ""} onChange={e => set("place", e.target.value)} placeholder="比如：江上的晚霞" /></label>}
       <label>{kind === "invite" ? "约会内容" : "内容"}<textarea value={form.content || ""} onChange={e => set("content", e.target.value)} placeholder="写点只有你们会懂的话……" /></label>
-      <div className="modal-actions"><PixelButton secondary onClick={onClose}>取消</PixelButton><PixelButton type="submit"><Send size={15} /> 保存</PixelButton></div>
+      <div className="modal‑actions"><PixelButton secondary onClick={onClose}>取消</PixelButton><PixelButton type="submit"><Send size={15} /> 保存</PixelButton></div>
     </form>
   </Modal>;
 }
@@ -688,7 +711,7 @@ function PhotoModal({ onClose, onSave }) {
       </label>
       <label>这张照片属于哪一天？<input type="date" value={date} onChange={e => setDate(e.target.value)} /></label>
       <label>照片说明<input value={caption} onChange={e => setCaption(e.target.value)} placeholder="例如：那天下雨了，但我们还是去了。" /></label>
-      <div className="modal-actions"><PixelButton secondary onClick={onClose}>取消</PixelButton><PixelButton type="submit" disabled={!file}>上传</PixelButton></div>
+      <div className="modal‑actions"><PixelButton secondary onClick={onClose}>取消</PixelButton><PixelButton type="submit" disabled={!file}>上传</PixelButton></div>
     </form>
   </Modal>;
 }
@@ -775,28 +798,28 @@ function SettingsModal({
   return (
     <Modal title="自定义小屋" onClose={onClose}>
       <form className="form" onSubmit={save}>
-        <label>小屋名称<input value={form.site_title || ""} onChange={e => set("site_title", e.target.value)} placeholder="love-journal" /></label>
+        <label>小屋名称<input value={form.site_title || ""} onChange={e => set("site_title", e.target.value)} placeholder="love‑journal" /></label>
         <label>副标题<input value={form.subtitle || ""} onChange={e => set("subtitle", e.target.value)} placeholder="把幸福的时刻，一格一格收藏起来" /></label>
-        <div className="color-row">
+        <div className="color‑row">
           {[["accent", "主色"], ["accent_2", "辅助色"], ["paper", "纸张色"], ["ink", "文字色"]].map(([k, l]) => (
             <label key={k}>{l}<input type="color" value={form[k] || "#ffffff"} onChange={e => set(k, e.target.value)} /></label>
           ))}
         </div>
         <label>背景图片
-          <div className="background-upload">
-            {preview ? <img src={preview} alt="背景预览" className="background-preview" style={{ objectFit: "contain", width: "100%", height: "auto" }} /> : <div className="background-empty">暂无背景图片</div>}
-            <label className="pixel-btn secondary">
+          <div className="background‑upload">
+            {preview ? <img src={preview} alt="背景预览" className="background‑preview" style={{ objectFit: "contain", width: "100%", height: "auto" }} /> : <div className="background‑empty">暂无背景图片</div>}
+            <label className="pixel‑btn secondary">
               <ImagePlus size={15} />{uploading ? "正在上传……" : "选择新的背景图片"}
               <input type="file" accept="image/jpeg,image/png,image/webp" onChange={pickBackground} style={{ display: "none" }} />
             </label>
           </div>
         </label>
-        <div className="theme-preview" style={{ backgroundColor: form.paper, color: form.ink }}>
+        <div className="theme‑preview" style={{ backgroundColor: form.paper, color: form.ink }}>
           <div style={{ background: form.accent }}>♥</div>
           <span>这是你的小屋预览</span>
         </div>
-        <p className="form-help">背景图片会上传到 Supabase Storage 的 love-media/background/ 文件夹，保存后会立即应用到网站顶部</p>
-        <div className="modal-actions">
+        <p className="form‑help">背景图片会上传到 Supabase Storage 的 love‑media/background/ 文件夹，保存后会立即应用到网站顶部</p>
+        <div className="modal‑actions">
           <PixelButton secondary onClick={onClose} disabled={saving}>取消</PixelButton>
           <PixelButton type="submit" disabled={saving}>{saving ? "保存中……" : "保存外观"}</PixelButton>
         </div>
@@ -805,6 +828,5 @@ function SettingsModal({
   );
 }
 
-/* ===== React 应用挂载 ===== */
 const root = createRoot(document.getElementById("root"));
 root.render(<App />);
