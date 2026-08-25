@@ -82,7 +82,7 @@ export default function App() {
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [drafts, saveDraft] = useLocalDraft();
-  const [albumFilterDate, setAlbumFilterDate] = useState(null); // 新增：相册日期筛选
+  const [albumFilterDate, setAlbumFilterDate] = useState(null);
 
   const refresh = async () => {
     if (!supabase) {
@@ -166,11 +166,9 @@ export default function App() {
     ...(settings.background_url ? { "--bg-image": `url(${settings.background_url})` } : {})
   };
 
-  // 修改后的 softDelete：先更新原表，成功后再插入回收站，避免不一致
   const softDelete = async (table, row) => {
     if (!supabase) return;
 
-    // 1. 先更新原表 deleted_at
     const { error: updateError } = await supabase
       .from(table)
       .update({ deleted_at: new Date().toISOString() })
@@ -182,7 +180,6 @@ export default function App() {
       return;
     }
 
-    // 2. 插入回收站
     const { error: trashError } = await supabase
       .from("trash")
       .insert({
@@ -194,7 +191,6 @@ export default function App() {
 
     if (trashError) {
       console.error("写入回收站失败：", trashError);
-      // 回滚原表更新，恢复记录
       await supabase.from(table).update({ deleted_at: null }).eq("id", row.id);
       alert("删除记录进入回收站失败，已恢复原记录");
       return;
@@ -343,7 +339,6 @@ export default function App() {
     }
   };
 
-  // 日历点击处理：优先跳转到有照片的相册筛选，否则跳事件簿
   const handleCalendarJump = (dateStr) => {
     const hasPhotos = photos.some(p => p.photo_date === dateStr);
     const hasEntries = entries.some(e => e.event_date === dateStr);
@@ -437,9 +432,6 @@ function HomeView({settings, entries, photos, onAdd, onPhoto, onOpen, onEdit, on
         </div>
       </div>
 
-      {/* =========================
-          像素场景
-         ========================= */}
       <div className="pixel-scene">
         {settings.background_url && (
           <div
@@ -528,18 +520,23 @@ function TimelineItem({row, onEdit, onDelete}) {
   </article>;
 }
 
+// ─── 🗓️ 修改：以周一为每周第一天，星期顺序为 一 二 三 四 五 六 日 ───
 function CalendarView({date, setDate, entries, photos, onJump}) {
   const year = date.getFullYear(), month = date.getMonth();
-  const first = new Date(year, month, 1).getDay();
-  const days = new Date(year, month + 1, 0).getDate();
-  const cells = Array.from({length: first + days}, (_, i) => i < first ? null : i - first + 1);
+  // 获取该月第一天是星期几（0=周日）
+  const firstDayOfMonth = new Date(year, month, 1).getDay();
+  // 转换为周一为0，周日为6
+  const first = firstDayOfMonth === 0 ? 6 : firstDayOfMonth - 1;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = Array.from({length: first + daysInMonth}, (_, i) => i < first ? null : i - first + 1);
   const marked = new Set([...entries.map(x => x.event_date), ...photos.map(x => x.photo_date)]);
   const dateKey = d => `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
   return <section>
     <PageTitle eyebrow="CALENDAR" title="我们的时间轴" action={<PixelButton onClick={() => onJump(today())}>回到今天</PixelButton>}/>
     <div className="calendar-card">
       <div className="calendar-head"><button className="icon-btn" onClick={() => setDate(new Date(year, month-1, 1))}><ChevronLeft/></button><h2>{year} / {String(month+1).padStart(2,"0")}</h2><button className="icon-btn" onClick={() => setDate(new Date(year, month+1, 1))}><ChevronRight/></button></div>
-      <div className="weekdays">{["日","一","二","三","四","五","六"].map(x => <b key={x}>{x}</b>)}</div>
+      <div className="weekdays">{weekdays.map(x => <b key={x}>{x}</b>)}</div>
       <div className="calendar-grid">{cells.map((d,i) => d === null ? <div key={i}/> :
         <button key={d} className={`day ${marked.has(dateKey(d)) ? "marked" : ""} ${dateKey(d) === today() ? "today" : ""}`} onClick={() => onJump(dateKey(d))}>
           <span>{d}</span>{marked.has(dateKey(d)) && <i>♥</i>}
@@ -565,7 +562,6 @@ function EventsView({entries, onAdd, onEdit, onDelete}) {
 }
 
 function AlbumView({photos, onAdd, onDelete, filterDate, onClearFilter}) {
-  // 排序：按 photo_date 降序，确保最新在前（同时兼容缺失日期）
   const sortedPhotos = [...photos].sort((a, b) => {
     const da = a.photo_date || "";
     const db = b.photo_date || "";
