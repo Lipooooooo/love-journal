@@ -529,23 +529,121 @@ function TimelineItem({row, onEdit, onDelete}) {
 }
 
 function CalendarView({date, setDate, entries, photos, onJump}) {
-  const year = date.getFullYear(), month = date.getMonth();
-  const first = new Date(year, month, 1).getDay();
-  const days = new Date(year, month + 1, 0).getDate();
-  const cells = Array.from({length: first + days}, (_, i) => i < first ? null : i - first + 1);
-  const marked = new Set([...entries.map(x => x.event_date), ...photos.map(x => x.photo_date)]);
-  const dateKey = d => `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  /*
+   * 日历核心规则：
+   * 1. 月份的第一天、每个月天数全部按“纯日期”计算，不使用本地时区的午夜时间。
+   * 2. 使用 UTC 只做星期计算，避免夏令时/时区导致同一个日期的星期发生漂移。
+   * 3. 日历翻页时始终把 calendarDate 规范化为当月 1 日的中午时间，
+   *    避免 Date 在不同环境下发生跨天。
+   */
+  const safeDate = date instanceof Date && !Number.isNaN(date.getTime())
+    ? date
+    : new Date();
+
+  const year = safeDate.getFullYear();
+  const month = safeDate.getMonth();
+
+  // 用 UTC 计算“当月 1 日是星期几”，结果不会受浏览器时区和夏令时影响。
+  const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay();
+
+  // 用 UTC 计算当月实际天数。
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+  // 日历总格子补足到完整周，避免不同月份切换时布局异常。
+  const totalCells = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+  const cells = Array.from({ length: totalCells }, (_, index) => {
+    const day = index - firstWeekday + 1;
+    return day >= 1 && day <= daysInMonth ? day : null;
+  });
+
+  const marked = new Set([
+    ...entries.map(x => x.event_date).filter(Boolean),
+    ...photos.map(x => x.photo_date).filter(Boolean)
+  ]);
+
+  // 统一使用 YYYY-MM-DD 纯日期字符串，不让 Date 时区参与日期显示。
+  const dateKey = day =>
+    `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+  // 仅用于“今天”高亮，同样按本地年月日生成纯日期字符串。
+  const now = new Date();
+  const todayKey =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  // 翻页时固定到目标月份的 1 日中午，避免 DST / 时区跨日问题。
+  const changeMonth = offset => {
+    const next = new Date(year, month + offset, 1, 12, 0, 0, 0);
+    setDate(next);
+  };
+
+  const goToday = () => {
+    // 先让日历本身回到现实中的当前月份，再执行原有跳转逻辑。
+    setDate(new Date(now.getFullYear(), now.getMonth(), 1, 12, 0, 0, 0));
+    onJump(todayKey);
+  };
+
   return <section>
-    <PageTitle eyebrow="CALENDAR" title="我们的时间轴" action={<PixelButton onClick={() => onJump(today())}>回到今天</PixelButton>}/>
+    <PageTitle
+      eyebrow="CALENDAR"
+      title="我们的时间轴"
+      action={<PixelButton onClick={goToday}>回到今天</PixelButton>}
+    />
+
     <div className="calendar-card">
-      <div className="calendar-head"><button className="icon-btn" onClick={() => setDate(new Date(year, month-1, 1))}><ChevronLeft/></button><h2>{year} / {String(month+1).padStart(2,"0")}</h2><button className="icon-btn" onClick={() => setDate(new Date(year, month+1, 1))}><ChevronRight/></button></div>
-      <div className="weekdays">{["日","一","二","三","四","五","六"].map(x => <b key={x}>{x}</b>)}</div>
-      <div className="calendar-grid">{cells.map((d,i) => d === null ? <div key={i}/> :
-        <button key={d} className={`day ${marked.has(dateKey(d)) ? "marked" : ""} ${dateKey(d) === today() ? "today" : ""}`} onClick={() => onJump(dateKey(d))}>
-          <span>{d}</span>{marked.has(dateKey(d)) && <i>♥</i>}
-        </button>)}</div>
+      <div className="calendar-head">
+        <button
+          className="icon-btn"
+          onClick={() => changeMonth(-1)}
+          aria-label="上个月"
+        >
+          <ChevronLeft/>
+        </button>
+
+        <h2>{year} / {String(month + 1).padStart(2, "0")}</h2>
+
+        <button
+          className="icon-btn"
+          onClick={() => changeMonth(1)}
+          aria-label="下个月"
+        >
+          <ChevronRight/>
+        </button>
+      </div>
+
+      <div className="weekdays">
+        {["日", "一", "二", "三", "四", "五", "六"].map(x =>
+          <b key={x}>{x}</b>
+        )}
+      </div>
+
+      <div className="calendar-grid">
+        {cells.map((day, index) => {
+          if (day === null) {
+            return <div key={`empty-${index}`} aria-hidden="true"/>;
+          }
+
+          const key = dateKey(day);
+          const isMarked = marked.has(key);
+          const isToday = key === todayKey;
+
+          return (
+            <button
+              key={key}
+              className={`day ${isMarked ? "marked" : ""} ${isToday ? "today" : ""}`}
+              onClick={() => onJump(key)}
+            >
+              <span>{day}</span>
+              {isMarked && <i>♥</i>}
+            </button>
+          );
+        })}
+      </div>
     </div>
-    <div className="calendar-hint"><CalendarDays size={18}/> 点击有爱心标记的日期，可跳转查看当天记录</div>
+
+    <div className="calendar-hint">
+      <CalendarDays size={18}/>
+      点击有爱心标记的日期，可跳转查看当天记录
+    </div>
   </section>;
 }
 
