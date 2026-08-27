@@ -850,7 +850,7 @@ function InviteView({entries, onAdd, onEdit, onDelete}) {
     <PageTitle eyebrow="DATE INVITATION" title="约会邀请" action={<PixelButton onClick={onAdd}><Heart size={16}/> 写邀请函</PixelButton>}/>
     <div className="invite-grid">
       {entries.map(r => <article className="invite-card" key={r.id}><div className="invite-top">YOU ARE INVITED ♥</div><h2>{r.title}</h2><div className="invite-row"><CalendarDays size={15}/>{fmtDate(r.event_date)} {r.event_time && `· ${r.event_time.slice(0,5)}`}</div><div className="invite-row"><MapPin size={15}/>{r.place || "等你一起决定"}</div><div className="invite-content">{r.content}</div><div className="invite-actions"><button onClick={() => onEdit(r)}>编辑</button><button onClick={() => onDelete("entries", r)}>回收</button></div></article>)}
-      {!entries.length && <Empty icon="✉" title="还没有约会邀请" text="发出第一封像素邀请函吧(*^▽^*)"/>}
+      {!entries.length && <Empty icon="✉" title="还没有约会邀请" text="发出第一封电子邀请函吧(*^▽^*)"/>}
     </div>
   </section>;
 }
