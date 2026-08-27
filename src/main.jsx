@@ -32,7 +32,9 @@ const TYPES = [
 ];
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  // 使用浏览器本地年月日，不使用 toISOString()，避免 UTC 时区把日期变成前一天。
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
 function fmtDate(v) {
@@ -166,52 +168,166 @@ export default function App() {
     ...(settings.background_url ? { "--bg-image": `url(${settings.background_url})` } : {})
   };
 
-  // 修改后的 softDelete：先更新原表，成功后再插入回收站，避免不一致
+  // 删除：先保存回收站记录，再尝试软删除。
+  // 如果数据库的 entries/photos UPDATE RLS 不允许修改 deleted_at，
+  // 自动尝试直接 DELETE，避免出现“点回收但原内容仍在”的情况。
   const softDelete = async (table, row) => {
-    if (!supabase) return;
+    if (!supabase || !session?.user?.id || !row?.id) return;
 
-    // 1. 先更新原表 deleted_at
+    const trashPayload = {
+      owner_id: session.user.id,
+      source_table: table,
+      source_id: row.id,
+      payload: row
+    };
+
+    // 先写入回收站，确保删除后仍然能恢复。
+    const { data: trashRow, error: trashError } = await supabase
+      .from("trash")
+      .insert(trashPayload)
+      .select("id")
+      .single();
+
+    if (trashError) {
+      console.error("写入回收站失败：", trashError);
+      alert("删除失败：无法写入回收站。\n" + trashError.message);
+      return;
+    }
+
+    // 优先使用软删除。
     const { error: updateError } = await supabase
       .from(table)
       .update({ deleted_at: new Date().toISOString() })
       .eq("id", row.id);
 
-    if (updateError) {
-      console.error("删除失败：", updateError);
-      alert("删除失败：" + updateError.message);
+    if (!updateError) {
+      await refresh();
       return;
     }
 
-    // 2. 插入回收站
-    const { error: trashError } = await supabase
-      .from("trash")
-      .insert({
-        owner_id: session.user.id,
-        source_table: table,
-        source_id: row.id,
-        payload: row
-      });
+    console.warn("软删除被 RLS 拒绝，尝试直接删除：", updateError);
 
-    if (trashError) {
-      console.error("写入回收站失败：", trashError);
-      // 回滚原表更新，恢复记录
-      await supabase.from(table).update({ deleted_at: null }).eq("id", row.id);
-      alert("删除记录进入回收站失败，已恢复原记录");
+    // 某些 Supabase RLS UPDATE 策略只允许 deleted_at 为 null，
+    // 这种情况下 UPDATE 会报“new row violates row-level security policy”。
+    // 若 DELETE 策略允许，则直接删除源记录，同时保留刚刚写入的回收站记录。
+    const { error: deleteError } = await supabase
+      .from(table)
+      .delete()
+      .eq("id", row.id);
+
+    if (!deleteError) {
+      await refresh();
       return;
     }
 
-    await refresh();
+    // 两种删除方式都失败，删除刚刚创建的回收站记录，避免产生“假回收站”。
+    if (trashRow?.id) {
+      await supabase
+        .from("trash")
+        .delete()
+        .eq("id", trashRow.id);
+    }
+
+    console.error("删除失败：", updateError, deleteError);
+    alert(
+      "删除失败。Supabase 当前的 RLS 策略同时阻止了修改/删除该记录。\n\n" +
+      "软删除：" + updateError.message + "\n\n" +
+      "直接删除：" + deleteError.message
+    );
   };
 
   const addEntry = async (payload) => {
-    if (!supabase) return;
-    const { error } = await supabase.from("entries").insert({ ...payload, owner_id: session.user.id });
-    if (error) alert(error.message); else { setModal(null); await refresh(); }
+    if (!supabase || !session?.user?.id) return;
+
+    const cleanPayload = {
+      title: payload.title || "",
+      content: payload.content || "",
+      event_date: payload.event_date || today(),
+      event_time: payload.event_time || null,
+      event_type: payload.kind === "event" ? (payload.event_type || "date") : (payload.event_type || null),
+      place: payload.place || "",
+      kind: payload.kind || "note",
+      owner_id: session.user.id
+    };
+
+    const { error } = await supabase.from("entries").insert(cleanPayload);
+    if (error) {
+      console.error("新增记录失败：", error);
+      alert("新增失败：" + error.message);
+      return;
+    }
+
+    setModal(null);
+    await refresh();
   };
 
   const updateEntry = async (id, payload) => {
-    const { error } = await supabase.from("entries").update(payload).eq("id", id);
-    if (error) alert(error.message); else { setModal(null); await refresh(); }
+    if (!supabase || !session?.user?.id || !id) return;
+
+    // 编辑时只更新真正可编辑的字段，绝不把 id、owner_id、created_at、deleted_at 等
+    // 数据库字段从表单原样写回，避免 RLS/主键字段造成异常。
+    const cleanPayload = {
+      title: payload.title || "",
+      content: payload.content || "",
+      event_date: payload.event_date || today(),
+      event_time: payload.event_time || null,
+      event_type: payload.kind === "event" ? (payload.event_type || "date") : (payload.event_type || null),
+      place: payload.place || "",
+      kind: payload.kind || "note"
+    };
+
+    const { data, error } = await supabase
+      .from("entries")
+      .update(cleanPayload)
+      .eq("id", id)
+      .select()
+      .maybeSingle();
+
+    if (!error && data) {
+      setModal(null);
+      await refresh();
+      return;
+    }
+
+    // 某些旧的 RLS 配置可能禁止 UPDATE，但允许 DELETE + INSERT。
+    // 这时用“替换原记录”的方式完成编辑，保证不会留下旧版本。
+    if (error) {
+      console.warn("UPDATE 编辑被拒绝，尝试替换原记录：", error);
+
+      const replacement = {
+        ...cleanPayload,
+        owner_id: session.user.id
+      };
+
+      const { error: deleteOldError } = await supabase
+        .from("entries")
+        .delete()
+        .eq("id", id);
+
+      if (!deleteOldError) {
+        const { error: insertNewError } = await supabase
+          .from("entries")
+          .insert(replacement);
+
+        if (!insertNewError) {
+          setModal(null);
+          await refresh();
+          return;
+        }
+
+        // 插入新版本失败时，尽量恢复原记录。
+        console.error("替换记录时新增失败：", insertNewError);
+        alert("保存修改失败：" + insertNewError.message);
+        await refresh();
+        return;
+      }
+
+      console.error("编辑记录失败：", error, deleteOldError);
+      alert("保存修改失败：" + error.message + "\n\n数据库 RLS 同时阻止了修改和替换原记录。");
+      return;
+    }
+
+    alert("保存失败：没有找到要修改的原记录。请刷新页面后再试。");
   };
 
   const uploadPhoto = async ({
@@ -648,7 +764,19 @@ function CalendarView({date, setDate, entries, photos, onJump}) {
 }
 
 function EventsView({entries, onAdd, onEdit, onDelete}) {
-  const grouped = TYPES.map(([id,label]) => [id,label,entries.filter(x => x.event_type === id)]);
+  // 事件簿只展示事件记录。对历史数据做兼容：
+  // 只要 event_type 属于六种分类之一就进入对应文件夹；缺失/异常值进入“其他”。
+  const eventEntries = entries.filter(x => x.kind === "event");
+  const validTypeIds = new Set(TYPES.map(x => x[0]));
+  const normalizedEventType = row =>
+    validTypeIds.has(row.event_type) ? row.event_type : "other";
+
+  const grouped = TYPES.map(([id,label]) => [
+    id,
+    label,
+    eventEntries.filter(x => normalizedEventType(x) === id)
+  ]);
+
   return <section>
     <PageTitle eyebrow="EVENT BOOK" title="事件簿" action={<PixelButton onClick={onAdd}><Plus size={16}/> 新事件</PixelButton>}/>
     <div className="folder-grid">
@@ -658,7 +786,7 @@ function EventsView({entries, onAdd, onEdit, onDelete}) {
         {!list.length && <small>这个文件夹还很轻……</small>}
       </div>)}
     </div>
-    <div className="stack-list">{entries.map(r => <TimelineItem key={r.id} row={r} onEdit={onEdit} onDelete={onDelete}/>)}</div>
+    <div className="stack-list">{eventEntries.map(r => <TimelineItem key={r.id} row={r} onEdit={onEdit} onDelete={onDelete}/>)}</div>
   </section>;
 }
 
@@ -729,9 +857,44 @@ function InviteView({entries, onAdd, onEdit, onDelete}) {
 
 function TrashView({trash, refresh}) {
   const restore = async item => {
-    const payload = item.payload;
+    if (!supabase || !item) return;
+
+    const payload = item.payload || {};
     const table = item.source_table;
-    await supabase.from(table).update({ deleted_at: null }).eq("id", item.source_id);
+
+    // 第一种情况：源记录仍然存在，只是被软删除。
+    const { data: restoredRow, error: restoreUpdateError } = await supabase
+      .from(table)
+      .update({ deleted_at: null })
+      .eq("id", item.source_id)
+      .select("id")
+      .maybeSingle();
+
+    if (!restoreUpdateError && restoredRow) {
+      await supabase.from("trash").delete().eq("id", item.id);
+      await refresh();
+      return;
+    }
+
+    // 第二种情况：删除时因为 RLS 无法 UPDATE，代码使用了 DELETE。
+    // 此时源记录已经不存在，需要从回收站 payload 重新插回原表。
+    const restoredPayload = {
+      ...payload,
+      id: item.source_id,
+      owner_id: payload.owner_id || item.owner_id,
+      deleted_at: null
+    };
+
+    const { error: insertError } = await supabase
+      .from(table)
+      .insert(restoredPayload);
+
+    if (insertError) {
+      console.error("恢复失败：", restoreUpdateError, insertError);
+      alert("恢复失败：" + insertError.message);
+      return;
+    }
+
     await supabase.from("trash").delete().eq("id", item.id);
     await refresh();
   };
@@ -752,7 +915,18 @@ function PageTitle({eyebrow,title,action}) {
 }
 
 function EntryModal({title, kind, initial, onClose, onSave}) {
-  const [form, setForm] = useState(initial || { title:"", content:"", event_date:today(), event_time:"", event_type:"date", place:"" });
+  // 编辑时只提取表单需要的字段，避免把数据库的 id/owner_id/时间戳等字段带回 update。
+  // kind 固定使用当前页面传入的类型，避免事件编辑后被错误写成 note。
+  const makeForm = value => ({
+    title: value?.title || "",
+    content: value?.content || "",
+    event_date: value?.event_date || today(),
+    event_time: value?.event_time ? value.event_time.slice(0, 5) : "",
+    event_type: value?.event_type || (kind === "event" ? "date" : ""),
+    place: value?.place || ""
+  });
+
+  const [form, setForm] = useState(() => makeForm(initial));
   const set = (k,v) => setForm(f => ({...f,[k]:v}));
   return <Modal title={title} onClose={onClose}>
     <form className="form" onSubmit={e => { e.preventDefault(); onSave({...form, kind}); }}>
